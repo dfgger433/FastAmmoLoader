@@ -1,2 +1,3 @@
 # FastAmmoLoader
 
+打开容器时按Alt自动从容器向手持枪械和弹匣装填弹药
