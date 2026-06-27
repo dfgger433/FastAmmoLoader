@@ -6,7 +6,7 @@ using UnityEngine;
 
 namespace CasualtiesUnknown.FastAmmoLoader
 {
-    [BepInPlugin("com.fastammoloader.casualtiesunknown", "快速装弹", "1.0.0")]
+    [BepInPlugin("com.fastammoloader.casualtiesunknown", "快速装弹", "1.1.0")]
     public class FastAmmoLoaderPlugin : BaseUnityPlugin
     {
         public static FastAmmoLoaderPlugin Instance;
@@ -26,7 +26,7 @@ namespace CasualtiesUnknown.FastAmmoLoader
             harmony = new Harmony("com.fastammoloader.casualtiesunknown");
             harmony.PatchAll();
 
-            Logger.LogInfo("快速装弹 Mod v1.0.0 已加载");
+            Logger.LogInfo("快速装弹 Mod v1.1.0 已加载 (兼容多人联机)");
         }
 
         private void Update()
@@ -57,7 +57,7 @@ namespace CasualtiesUnknown.FastAmmoLoader
 
             if (gun != null)
             {
-                LoadAmmoIntoGun(body, gun, openContainer);
+                LoadAmmoIntoGun(body, gun, heldItem, openContainer);
                 cam.RepopulateContainer();
                 return;
             }
@@ -65,64 +65,57 @@ namespace CasualtiesUnknown.FastAmmoLoader
             AmmoScript heldAmmo = heldItem.GetComponent<AmmoScript>();
             if (heldAmmo != null && heldAmmo.itemType == AmmoScript.AmmoItemType.Magazine)
             {
-                LoadRoundsIntoMagazine(body, heldAmmo, openContainer);
+                LoadRoundsIntoMagazine(body, heldAmmo, heldItem, openContainer);
                 cam.RepopulateContainer();
             }
         }
 
-        private void LoadAmmoIntoGun(Body body, GunScript gun, Container container)
+        private void LoadAmmoIntoGun(Body body, GunScript gun, Item gunItem, Container container)
         {
             if (gun.feedType == GunScript.FeedType.Direct)
             {
-                LoadRoundsIntoDirectFeedGun(body, gun, container);
+                LoadRoundsIntoDirectFeedGun(body, gun, gunItem, container);
             }
             else
             {
-                LoadMagazineIntoGun(body, gun, container);
+                LoadMagazineIntoGun(body, gun, gunItem, container);
             }
         }
 
-        private void LoadRoundsIntoDirectFeedGun(Body body, GunScript gun, Container container)
+        private void LoadRoundsIntoDirectFeedGun(Body body, GunScript gun, Item gunItem, Container container)
         {
             if (gun.roundsInMag >= gun.magCapacity) return;
 
-            bool loaded = false;
-            List<Transform> toDestroy = new List<Transform>();
+            List<Item> ammoItems = new List<Item>();
 
             foreach (Transform child in container.transform)
             {
-                if (gun.roundsInMag >= gun.magCapacity) break;
+                if (ammoItems.Count >= gun.magCapacity - gun.roundsInMag) break;
 
                 AmmoScript ammo = child.GetComponent<AmmoScript>();
                 if (ammo == null || ammo.itemType != AmmoScript.AmmoItemType.Round) continue;
                 if (ammo.ammoType != gun.ammoType) continue;
 
-                if (gun.racked && gun.roundInChamber == GunScript.RoundInChamber.None)
+                Item ammoItem = child.GetComponent<Item>();
+                if (ammoItem != null)
                 {
-                    gun.roundInChamber = GunScript.RoundInChamber.Round;
+                    ammoItems.Add(ammoItem);
                 }
-                else
-                {
-                    gun.roundsInMag++;
-                }
-                toDestroy.Add(child);
-                loaded = true;
             }
 
-            foreach (Transform t in toDestroy)
+            foreach (Item ammoItem in ammoItems)
             {
-                Object.Destroy(t.gameObject);
-            }
+                if (ammoItem == null) continue;
+                if (gun.roundsInMag >= gun.magCapacity) break;
 
-            if (loaded)
-            {
-                Sound.Play("gunloadshell", gun.transform.position, false, true, null, 1f, 1f, false, false);
+                body.CombineItems(gunItem, ammoItem);
             }
         }
 
-        private void LoadMagazineIntoGun(Body body, GunScript gun, Container container)
+        private void LoadMagazineIntoGun(Body body, GunScript gun, Item gunItem, Container container)
         {
             AmmoScript bestMag = null;
+            Item bestMagItem = null;
             int bestRounds = -1;
 
             foreach (Transform child in container.transform)
@@ -134,29 +127,28 @@ namespace CasualtiesUnknown.FastAmmoLoader
                 {
                     bestRounds = ammo.rounds;
                     bestMag = ammo;
+                    bestMagItem = child.GetComponent<Item>();
                 }
             }
 
-            if (bestMag != null)
+            if (bestMag != null && bestMagItem != null)
             {
                 if (gun.hasMag)
                 {
                     gun.UnloadMag();
                 }
-                Item magItem = bestMag.GetComponent<Item>();
-                container.UnloadItem(magItem, null);
-                gun.LoadMag(bestMag);
-                Sound.Play("gunloadshell", gun.transform.position, false, true, null, 1f, 1f, false, false);
+                body.CombineItems(gunItem, bestMagItem);
             }
             else
             {
-                LoadRoundsIntoGunMagazine(body, gun, container);
+                LoadRoundsIntoGunMagazine(body, gun, gunItem, container);
             }
         }
 
-        private void LoadRoundsIntoGunMagazine(Body body, GunScript gun, Container container)
+        private void LoadRoundsIntoGunMagazine(Body body, GunScript gun, Item gunItem, Container container)
         {
             AmmoScript gunMag = null;
+            Item gunMagItem = null;
 
             foreach (Transform child in gun.transform)
             {
@@ -164,63 +156,66 @@ namespace CasualtiesUnknown.FastAmmoLoader
                 if (ammo != null && ammo.itemType == AmmoScript.AmmoItemType.Magazine)
                 {
                     gunMag = ammo;
+                    gunMagItem = child.GetComponent<Item>();
                     break;
                 }
             }
 
             if (gunMag == null || gunMag.rounds >= gunMag.maxRounds) return;
 
-            List<Transform> toDestroy = new List<Transform>();
+            List<Item> ammoItems = new List<Item>();
 
             foreach (Transform child in container.transform)
             {
-                if (gunMag.rounds >= gunMag.maxRounds) break;
+                if (ammoItems.Count >= gunMag.maxRounds - gunMag.rounds) break;
 
                 AmmoScript ammo = child.GetComponent<AmmoScript>();
                 if (ammo == null || ammo.itemType != AmmoScript.AmmoItemType.Round) continue;
                 if (ammo.ammoType != gun.ammoType) continue;
 
-                gunMag.rounds++;
-                toDestroy.Add(child);
+                Item ammoItem = child.GetComponent<Item>();
+                if (ammoItem != null)
+                {
+                    ammoItems.Add(ammoItem);
+                }
             }
 
-            foreach (Transform t in toDestroy)
+            foreach (Item ammoItem in ammoItems)
             {
-                Object.Destroy(t.gameObject);
-            }
+                if (ammoItem == null) continue;
+                if (gunMag.rounds >= gunMag.maxRounds) break;
 
-            if (toDestroy.Count > 0)
-            {
-                Sound.Play("gunloadshell", gun.transform.position, false, true, null, 1f, 1f, false, false);
+                body.CombineItems(gunMagItem, ammoItem);
             }
         }
 
-        private void LoadRoundsIntoMagazine(Body body, AmmoScript magazine, Container container)
+        private void LoadRoundsIntoMagazine(Body body, AmmoScript magazine, Item magItem, Container container)
         {
             if (magazine.rounds >= magazine.maxRounds) return;
 
-            List<Transform> toDestroy = new List<Transform>();
+            List<Item> ammoItems = new List<Item>();
 
             foreach (Transform child in container.transform)
             {
-                if (magazine.rounds >= magazine.maxRounds) break;
+                if (ammoItems.Count >= magazine.maxRounds - magazine.rounds) break;
 
                 AmmoScript ammo = child.GetComponent<AmmoScript>();
                 if (ammo == null || ammo.itemType != AmmoScript.AmmoItemType.Round) continue;
                 if (ammo.ammoType != magazine.ammoType) continue;
 
-                magazine.rounds++;
-                toDestroy.Add(child);
+                Item ammoItem = child.GetComponent<Item>();
+                if (ammoItem != null)
+                {
+                    ammoItems.Add(ammoItem);
+                }
             }
 
-            foreach (Transform t in toDestroy)
+            foreach (Item ammoItem in ammoItems)
             {
-                Object.Destroy(t.gameObject);
-            }
+                if (ammoItem == null) continue;
+                if (magazine.rounds >= magazine.maxRounds) break;
 
-            if (toDestroy.Count > 0)
-            {
-                Sound.Play("gunloadshell", magazine.transform.position, false, true, null, 1f, 1f, false, false);
+                body.CombineItems(magItem, ammoItem);
             }
         }
     }
